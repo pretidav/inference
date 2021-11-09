@@ -74,7 +74,7 @@ def predict(test_images, test_labels, class_names,N):
 
     for i,pred in enumerate(predictions):
         print('Predicted {} vs {}'.format(np.argmax(pred), test_labels[i]))
-        print(predictions)
+        print(pred)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
