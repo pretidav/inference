@@ -17,21 +17,21 @@ class Actor:
             return a*tf.constant(self.action_bound,dtype=tf.float32)
         
         def rescale_pos(a):
-            return tf.cast(a*tf.constant(self.state_dim,dtype=tf.float32),dtype=tf.int32)
+            return a*tf.constant(self.state_dim-1,dtype=tf.float32)
+                #tf.cast(a*tf.constant(self.state_dim-1,dtype=tf.float32),dtype=tf.int32)
         
 
         state_input = tf.keras.layers.Input((self.state_dim,))
-        dense_1 = tf.keras.layers.Dense(50, activation='relu')(state_input)
-        dense_2 = tf.keras.layers.Dense(32, activation='relu')(dense_1)
+        dense_1 = tf.keras.layers.Dense(50, activation='linear')(state_input)
+        dense_2 = tf.keras.layers.Dense(32, activation='linear')(dense_1)
         
         out_mu = tf.keras.layers.Dense(self.action_dim, activation='sigmoid')(dense_2)   
-        mu_output = tf.keras.layers.Lambda(lambda x: rescale(x))(out_mu)
-
         std_output = tf.keras.layers.Dense(self.action_dim, activation='softplus')(dense_2) 
-
-        position   = tf.keras.layers.Dense(1, activation='sigmoid')(dense_2)   
-        position_output = tf.keras.layers.Lambda(lambda x: rescale_pos(x))(position)
+        mu_output = out_mu #tf.keras.layers.Lambda(lambda x: rescale(x))(out_mu)
         
+        dense_3  = tf.keras.layers.Dense(16, activation='linear')(dense_2)
+        position   = tf.keras.layers.Dense(1, activation='sigmoid')(dense_3)   
+        position_output = tf.keras.layers.Lambda(lambda x: rescale_pos(x))(position)
         
         return tf.keras.models.Model(state_input, [mu_output, std_output, position_output])
 
@@ -39,17 +39,24 @@ class Actor:
         state = np.reshape(state, [1, self.state_dim])
         mu, std, pos = self.model.predict(state)
         mu, std, pos = mu[0], std[0], pos[0]
-        return np.round(np.random.normal(mu, std, size=self.action_dim)).astype(int), pos
-
-    def compute_loss(self, mu, std, actions, advantages):
-        dist = tfp.distributions.Normal(loc=mu, scale=std)
-        loss_policy = (-dist.log_prob(value=actions) * advantages + 0.001*dist.entropy())
-        return tf.reduce_sum(loss_policy)
         
-    def train(self, states, actions, advantages):
+        return np.random.normal(mu, std, size=self.action_dim), pos
+
+    def compute_loss(self, mu, std, actions, pos, pos_pred, advantages):
+        dist = tfp.distributions.Normal(loc=mu, scale=std)
+        mse_loss = tf.keras.losses.MeanSquaredError() 
+        loss_policy = (-dist.log_prob(value=actions) * advantages + 0.001*dist.entropy())
+        return tf.reduce_sum(loss_policy) + mse_loss(tf.cast(pos_pred,tf.float32),tf.cast(pos,tf.float32))
+        
+    def train(self, states, actions, pos, advantages):
         with tf.GradientTape() as tape:
-            mu, std, pos = self.model(states, training=True)
-            loss = self.compute_loss(mu, std, actions, advantages)
+            mu, std, pos_pred = self.model(states, training=True)
+            loss = self.compute_loss(mu=mu, 
+                                    std=std, 
+                                    actions=actions,
+                                    pos_pred=pos_pred,
+                                    pos=pos,
+                                    advantages=advantages)
         grads = tape.gradient(loss, self.model.trainable_variables)
         self.opt.apply_gradients(zip(grads, self.model.trainable_variables))
         return loss
@@ -87,7 +94,7 @@ class A2CAgent:
     def __init__(self, data_shape):
         self.state_dim = data_shape
         self.action_dim = 1 
-        self.action_bound = 255
+        self.action_bound = 1
         self.std_bound = [1e-3, 1.0]
         self.gamma = 0.99
         self.actor = Actor(self.state_dim, self.action_dim,

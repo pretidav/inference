@@ -30,10 +30,8 @@ def get_reward(attack_image,target_image):
 
 def take_step(state,target_image, action, pos): 
     image_flat = state
-    image_flat[pos]=action
+    image_flat[int(pos)]=action
     next_state = np.reshape(image_flat,newshape=(28,28,1))    
-    print(np.shape(next_state))
-    print(np.shape(target_image))
     reward, done = get_reward(attack_image=next_state, target_image=target_image)
     return next_state, reward, done
 
@@ -42,10 +40,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch", default=1)
     parser.add_argument("--episodes", default=1)
-    # parser.add_argument("--epoch", default=10)
-    # parser.add_argument("--train", action='store_true')
-    # parser.add_argument("--serve", action='store_true')
-    # parser.add_argument("--predict", action='store_true')
+
     
     args = parser.parse_args()
 
@@ -60,29 +55,34 @@ if __name__=='__main__':
     agent = A2CAgent(data_shape=np.shape(state)[0])
     agent.actor.model.summary()
     agent.critic.model.summary()
-    batch_size=args.batch
+    batch_size=int(args.batch)
     num_of_episodes = args.episodes
 
     ep = 0 
     won = 0
-    
+    count = 0
     for i_episode in tqdm(range(num_of_episodes)):
-        state_batch = []
-        action_batch = []
+        reward_history  = []
+        state_batch     = []
+        action_batch    = []
+        pos_batch       = []
         td_target_batch = []
         advantage_batch = []
         episode_reward, done = 0, False
         
         while True:
+            count +=1
             action, pos = agent.actor.get_action(state)
             action = np.clip(action, 0, agent.action_bound)
-            print(action,pos)
+            pos = pos.astype(int)
             next_state, reward, done = take_step(state=state, 
                                                     target_image=target_image, 
                                                     action=action, 
                                                     pos=pos)
+            reward_history.append(reward)
             state = np.reshape(state, [1, agent.state_dim])
             action = np.reshape(action, [1, agent.action_dim])
+            pos    = np.reshape(pos, [1, 1])
             next_state = np.reshape(next_state, [1, agent.state_dim])
             reward = np.reshape(reward, [1, 1])
             td_target = agent.td_target(reward, next_state, done)
@@ -90,23 +90,38 @@ if __name__=='__main__':
 
             state_batch.append(state)
             action_batch.append(action)
+            pos_batch.append(pos)
             td_target_batch.append(td_target)
             advantage_batch.append(advantage)
 
             if len(state_batch) >= batch_size or done:    
                 states = agent.list_to_batch(state_batch)
                 actions = agent.list_to_batch(action_batch)
+                poss       = agent.list_to_batch(pos_batch)
                 td_targets = agent.list_to_batch(td_target_batch)
                 advantages = agent.list_to_batch(advantage_batch)
-                actor_loss = agent.actor.train(states, actions, advantages)
-                critic_loss = agent.critic.train(states, td_targets)    
-                state_batch = []
-                action_batch = []
+                actor_loss = agent.actor.train(states=states, 
+                                                actions=actions, 
+                                                pos=poss, 
+                                                advantages=advantages)
+                critic_loss = agent.critic.train(states=states, 
+                                                td_targets=td_targets)    
+                state_batch     = []
+                action_batch    = []
+                pos_batch       = []
                 td_target_batch = []
                 advantage_batch = []
 
             episode_reward += reward[0][0]
             state = next_state[0]
+
+            if count==2000:
+                x = [i for i in range(count)]
+                plt.scatter(x=x,y=reward_history)
+                plt.xlabel('epochs')
+                plt.legend(['reward'])
+                plt.show()
+                break
 
             if done:
                 won+=1
