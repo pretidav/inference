@@ -33,7 +33,7 @@ def train_model(epochs, train_images, train_labels, test_images, test_labels):
     keras.layers.Conv2D(input_shape=(28,28,1), filters=8, kernel_size=3, 
                         strides=2, activation='relu', name='Conv1'),
     keras.layers.Flatten(),
-    keras.layers.Dense(10, name='Dense',activation='sorfmax')
+    keras.layers.Dense(10, name='Dense',activation='softmax')
     ])
     model.summary()
 

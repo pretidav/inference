@@ -3,59 +3,46 @@ import numpy as np
 import tensorflow_probability as tfp
 
 class Actor:
-    def __init__(self, state_dim, action_dim, action_bound, std_bound):
+    def __init__(self, state_dim, action_dim, action_bound):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.action_bound = action_bound
-        self.std_bound = std_bound
         self.model = self.create_model()
         self.opt = tf.keras.optimizers.Adam(learning_rate=0.001)
 
     def create_model(self):
+        # Encoder
+        input = tf.keras.layers.Input(shape=self.state_dim)
+        x = tf.keras.layers.Conv2D(32, (3, 3), activation="relu", padding="same")(input)
+        x = tf.keras.layers.MaxPooling2D((2, 2), padding="same")(x)
+        x = tf.keras.layers.Conv2D(32, (3, 3), activation="relu", padding="same")(x)
+        x = tf.keras.layers.MaxPooling2D((2, 2), padding="same")(x)
+        # Decoder
+        x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, activation="relu", padding="same")(x)
+        x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, activation="relu", padding="same")(x)
+        out = tf.keras.layers.Conv2D(1, (3, 3), activation="sigmoid", padding="same")(x)
         
-        def rescale(a):
-            return a*tf.constant(self.action_bound,dtype=tf.float32)
-        
-        def rescale_pos(a):
-            return a*tf.constant(self.state_dim-1,dtype=tf.float32)
-                #tf.cast(a*tf.constant(self.state_dim-1,dtype=tf.float32),dtype=tf.int32)
-        
-
-        state_input = tf.keras.layers.Input((self.state_dim,))
-        dense_1 = tf.keras.layers.Dense(50, activation='linear')(state_input)
-        dense_2 = tf.keras.layers.Dense(32, activation='linear')(dense_1)
-        
-        out_mu = tf.keras.layers.Dense(self.action_dim, activation='sigmoid')(dense_2)   
-        std_output = tf.keras.layers.Dense(self.action_dim, activation='softplus')(dense_2) 
-        mu_output = out_mu #tf.keras.layers.Lambda(lambda x: rescale(x))(out_mu)
-        
-        dense_3  = tf.keras.layers.Dense(16, activation='linear')(dense_2)
-        position   = tf.keras.layers.Dense(1, activation='sigmoid')(dense_3)   
-        position_output = tf.keras.layers.Lambda(lambda x: rescale_pos(x))(position)
-        
-        return tf.keras.models.Model(state_input, [mu_output, std_output, position_output])
+        return tf.keras.models.Model(input, out)
 
     def get_action(self, state):
-        state = np.reshape(state, [1, self.state_dim])
-        mu, std, pos = self.model.predict(state)
-        mu, std, pos = mu[0], std[0], pos[0]
-        
-        return np.random.normal(mu, std, size=self.action_dim), pos
+        state = np.reshape(state, [1,28,28])
+        pert = self.model.predict(state)
+        return pert[0]
 
-    def compute_loss(self, mu, std, actions, pos, pos_pred, advantages):
-        dist = tfp.distributions.Normal(loc=mu, scale=std)
-        mse_loss = tf.keras.losses.MeanSquaredError() 
-        loss_policy = (-dist.log_prob(value=actions) * advantages + 0.001*dist.entropy())
-        return tf.reduce_sum(loss_policy) + mse_loss(tf.cast(pos_pred,tf.float32),tf.cast(pos,tf.float32))
-        
-    def train(self, states, actions, pos, advantages):
+    def get_noisy_action(self,state,time,alpha):
+        return self.get_action(state) + alpha/time *np.random.rand(28,28,1)
+
+    def compute_loss(self, actions, pert, advantages):
+        mse = tf.keras.losses.MeanSquaredError()
+        return mse(actions, pert, sample_weight=tf.stop_gradient(advantages))
+
+
+    def train(self, states, actions, advantages):
         with tf.GradientTape() as tape:
-            mu, std, pos_pred = self.model(states, training=True)
-            loss = self.compute_loss(mu=mu, 
-                                    std=std, 
+            pert = self.model(states, training=True)
+            loss = self.compute_loss( 
                                     actions=actions,
-                                    pos_pred=pos_pred,
-                                    pos=pos,
+                                    pert=pert,
                                     advantages=advantages)
         grads = tape.gradient(loss, self.model.trainable_variables)
         self.opt.apply_gradients(zip(grads, self.model.trainable_variables))
@@ -68,11 +55,14 @@ class Critic:
         self.opt = tf.keras.optimizers.Adam(learning_rate=0.001)
 
     def create_model(self):
-        state_input = tf.keras.layers.Input((self.state_dim,))
-        dense_1 = tf.keras.layers.Dense(50, activation='relu')(state_input)
-        dense_2 = tf.keras.layers.Dense(32, activation='relu')(dense_1)
-        dense_3 = tf.keras.layers.Dense(16, activation='relu')(dense_2)
-        v       = tf.keras.layers.Dense(1, activation='linear')(dense_3)
+        state_input = tf.keras.layers.Input(shape=self.state_dim)
+        x = tf.keras.layers.Conv2D(10, (3, 3), activation="relu", padding="same")(state_input)
+        x = tf.keras.layers.MaxPooling2D((2, 2), padding="same")(x)
+        x = tf.keras.layers.Conv2D(10, (3, 3), activation="relu", padding="same")(x)
+        x = tf.keras.layers.MaxPooling2D((2, 2), padding="same")(x)
+        x = tf.keras.layers.Flatten()(x)
+        v = tf.keras.layers.Dense(1, activation='linear')(x)
+
         return tf.keras.models.Model(state_input, v)
 
     def compute_loss(self, v_pred, td_targets):
@@ -91,21 +81,20 @@ class Critic:
 
 
 class A2CAgent:
-    def __init__(self, data_shape):
+    def __init__(self, data_shape,seed=1988):
+        np.random.seed(seed=seed)
         self.state_dim = data_shape
-        self.action_dim = 1 
+        self.action_dim = data_shape 
         self.action_bound = 1
-        self.std_bound = [1e-3, 1.0]
         self.gamma = 0.99
         self.actor = Actor(self.state_dim, self.action_dim,
-                           self.action_bound, self.std_bound)
+                           self.action_bound)
         self.critic = Critic(self.state_dim)
 
-    def td_target(self, reward, next_state, done):
+    def td_target(self, reward, next_state, done): 
         if done:
             return reward
-        v_value = self.critic.model.predict(
-            np.reshape(next_state, [1, self.state_dim]))
+        v_value = self.critic.model.predict(np.reshape(next_state,[1,28,28]))
         return np.reshape(reward + self.gamma * v_value[0], [1, 1])
 
     def advantage(self, td_targets, baselines):

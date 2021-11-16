@@ -28,11 +28,12 @@ def get_reward(attack_image,target_image):
         done = True
     return reward, done 
 
-def take_step(state,target_image, action, pos): 
-    image_flat = state
-    image_flat[int(pos)]=action
-    next_state = np.reshape(image_flat,newshape=(28,28,1))    
+def take_step(state, target_image, action, eps, counter): 
+    next_state = state + eps*action    
+    next_state = np.clip(next_state, 0, 1)
     reward, done = get_reward(attack_image=next_state, target_image=target_image)
+    if counter>1000: 
+        done = True
     return next_state, reward, done
 
 
@@ -40,7 +41,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch", default=1)
     parser.add_argument("--episodes", default=1)
-
+    parser.add_argument("--eps", default=0.001)
     
     args = parser.parse_args()
 
@@ -48,20 +49,27 @@ if __name__=='__main__':
     target_image = train_images[0]
     target_label = train_labels[0]
 
-    state = np.ndarray.flatten(train_images[0])
+    state = train_images[0]
     state_label = train_labels[0]
 
-    
-    agent = A2CAgent(data_shape=np.shape(state)[0])
+
+    agent = A2CAgent(data_shape=state.shape)
     agent.actor.model.summary()
     agent.critic.model.summary()
     batch_size=int(args.batch)
-    num_of_episodes = args.episodes
+    num_of_episodes = int(args.episodes)
+    eps = float(args.eps)
 
     ep = 0 
     won = 0
-    count = 0
     for i_episode in tqdm(range(num_of_episodes)):
+        count = 0
+        
+        target_image = train_images[0]
+        target_label = train_labels[0]
+        state        = train_images[0]
+        state_label  = train_labels[0]
+    
         reward_history  = []
         state_batch     = []
         action_batch    = []
@@ -72,66 +80,70 @@ if __name__=='__main__':
         
         while True:
             count +=1
-            action, pos = agent.actor.get_action(state)
+            #action = agent.actor.get_action(state)
+            action = agent.actor.get_noisy_action(state=state, time=count, alpha=0.01)
             action = np.clip(action, 0, agent.action_bound)
-            pos = pos.astype(int)
             next_state, reward, done = take_step(state=state, 
                                                     target_image=target_image, 
                                                     action=action, 
-                                                    pos=pos)
+                                                    eps=eps,
+                                                    counter=count)
+            if count%100==0:
+                print('epoch {}: reward {}'.format(count,reward))
             reward_history.append(reward)
-            state = np.reshape(state, [1, agent.state_dim])
-            action = np.reshape(action, [1, agent.action_dim])
-            pos    = np.reshape(pos, [1, 1])
-            next_state = np.reshape(next_state, [1, agent.state_dim])
+            
+            action = np.reshape(action,  [1, 28, 28])
+            next_state = np.reshape(next_state,  [1, 28, 28])
+            state = np.reshape(state,  [1, 28, 28])
+            
+
+            
             reward = np.reshape(reward, [1, 1])
             td_target = agent.td_target(reward, next_state, done)
             advantage = agent.advantage(td_target, agent.critic.model.predict(state))
-
+           
             state_batch.append(state)
             action_batch.append(action)
-            pos_batch.append(pos)
             td_target_batch.append(td_target)
             advantage_batch.append(advantage)
-
+            
             if len(state_batch) >= batch_size or done:    
                 states = agent.list_to_batch(state_batch)
                 actions = agent.list_to_batch(action_batch)
-                poss       = agent.list_to_batch(pos_batch)
+                actions=np.expand_dims(actions,axis=3)
                 td_targets = agent.list_to_batch(td_target_batch)
                 advantages = agent.list_to_batch(advantage_batch)
+               
                 actor_loss = agent.actor.train(states=states, 
                                                 actions=actions, 
-                                                pos=poss, 
                                                 advantages=advantages)
                 critic_loss = agent.critic.train(states=states, 
                                                 td_targets=td_targets)    
                 state_batch     = []
                 action_batch    = []
-                pos_batch       = []
                 td_target_batch = []
                 advantage_batch = []
 
             episode_reward += reward[0][0]
-            state = next_state[0]
-
-            if count==2000:
+            state = np.reshape(next_state[0],[28,28,1])
+            
+            if episode_reward/count>0.8:
                 x = [i for i in range(count)]
                 plt.scatter(x=x,y=reward_history)
                 plt.xlabel('epochs')
                 plt.legend(['reward'])
                 plt.show()
-                break
+                #break
 
             if done:
                 won+=1
                 print('won')
-                print("Episode {} finished with {} mean reward".format(i_episode+1,episode_reward))
+                print("Episode {} finished with {} mean reward".format(i_episode+1,episode_reward/count))
                 break
 
-        if won==50:
-            print('--- won ---')
-            agent.actor.model.save('./models/actor.hdf5',overwrite=True,include_optimizer=False)
-            agent.critic.model.save('./models/critic.hdf5',overwrite=True,include_optimizer=False)
-            break
+        # if won==50:
+        #     print('--- won ---')
+        #     agent.actor.model.save('./models/actor.hdf5',overwrite=True,include_optimizer=False)
+        #     agent.critic.model.save('./models/critic.hdf5',overwrite=True,include_optimizer=False)
+        #     break
             
