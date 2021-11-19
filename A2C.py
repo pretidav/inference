@@ -18,9 +18,9 @@ class Actor:
         x = tf.keras.layers.Conv2D(32, (3, 3), activation="relu", padding="same")(x)
         x = tf.keras.layers.MaxPooling2D((2, 2), padding="same")(x)
         # Decoder
-        x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, activation="relu", padding="same")(x)
-        x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, activation="relu", padding="same")(x)
-        out = tf.keras.layers.Conv2D(1, (3, 3), activation="sigmoid", padding="same")(x)
+        x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, activation="linear", padding="same")(x)
+        x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, activation="linear", padding="same")(x)
+        out = tf.keras.layers.Conv2D(1, (3, 3), activation="tanh", padding="same")(x)
         
         return tf.keras.models.Model(input, out)
 
@@ -30,7 +30,7 @@ class Actor:
         return pert[0]
 
     def get_noisy_action(self,state,time,alpha):
-        return self.get_action(state) + alpha/time *np.random.rand(28,28,1)
+        return self.get_action(state) + alpha/np.sqrt(time) * np.random.uniform(size=(28,28,1),low=-1,high=1)
 
     def compute_loss(self, actions, pert, advantages):
         mse = tf.keras.losses.MeanSquaredError()
@@ -61,6 +61,7 @@ class Critic:
         x = tf.keras.layers.Conv2D(10, (3, 3), activation="relu", padding="same")(x)
         x = tf.keras.layers.MaxPooling2D((2, 2), padding="same")(x)
         x = tf.keras.layers.Flatten()(x)
+        x = tf.keras.layers.Dense(10, activation='linear')(x)
         v = tf.keras.layers.Dense(1, activation='linear')(x)
 
         return tf.keras.models.Model(state_input, v)
